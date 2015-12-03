@@ -82,9 +82,9 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	// When has this case
 	case vs.IsPrimary(args.Me):
 		// Primary died but recovered, cannot trust, promote backup
-		if args.Viewnum == 0 {
+		if args.Viewnum == 0 && vs.Acked() { // Drawback...no ack, do nothing
 			vs.PromoteBackup()
-		} else { // Heartbeat from healthy p/s, update tick count.
+		} else if args.Viewnum != 0 { // Heartbeat from healthy p/s, update tick count.
 				vs.primaryAck = args.Viewnum
 				vs.primaryTick = vs.currentTick
 		}

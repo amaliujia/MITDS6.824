@@ -60,10 +60,11 @@ const DeadPings = 5
 type PingArgs struct {
 	Me      string // "host:port"
 	Viewnum uint   // caller's notion of current view #
+								 // @amaliujia when this is 0, it indicates new and ready for backup
 }
 
 type PingReply struct {
-	View View
+	View View // @amaliuji current view?
 }
 
 //

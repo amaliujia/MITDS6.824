@@ -38,12 +38,11 @@ func Test1(t *testing.T) {
 
 	vshost := port("v")
 	vs := StartServer(vshost)
+	fmt.Printf("Test server start")
 
 	ck1 := MakeClerk(port("1"), vshost)
 	ck2 := MakeClerk(port("2"), vshost)
 	ck3 := MakeClerk(port("3"), vshost)
-
-	//
 
 	if ck1.Primary() != "" {
 		t.Fatalf("there was a primary too soon")

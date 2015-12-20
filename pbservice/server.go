@@ -11,7 +11,8 @@ import "sync/atomic"
 import "os"
 import "syscall"
 import "math/rand"
-import "strconv"
+// import "strconv"
+import "errors"
 
 const Debug = 0
 
@@ -33,14 +34,35 @@ func (pb *PBServer) IsPrimary() bool {
 	return pb.view.Primary == pb.me
 }
 
+func (pb *PBServer) IsBackup() bool {
+	return pb.view.Backup == pb.me
+}
+
+func (pb *PBServer) HasPrimary() bool{
+	return pb.view.Primary != ""
+}
+
+func (pb *PBServer) HasBackup() bool{
+	return pb.view.Backup != ""
+}
+
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 	pb.mu.Lock()
 	// Your code here.
+	reply.Value = "???"
+	if !pb.IsPrimary() {
+		reply.Err = ErrWrongServer
+		pb.mu.Unlock()
+		return errors.New("WrongServer")
+	}
+
 	if pb.db[args.Key] == "" {
 		reply.Err = ErrNoKey
-	} else {
-		reply.Err = OK
+		pb.mu.Unlock()
+		return errors.New("NoSuchKeyExists")
 	}
+
+	reply.Err = OK
 	reply.Value = pb.db[args.Key]
 	pb.mu.Unlock()
 	return nil
@@ -51,13 +73,12 @@ func (pb *PBServer) HandlePutAppend(args *PutAppendArgs, reply *PutAppendReply) 
 	if args.Mode == 0 { // put
 		// fmt.Println("args put key(%v), value(%v)", args.Key, args.Value);
 		pb.db[args.Key] = args.Value
-		reply.Err = OK
 	} else {
 		j := pb.db[args.Key]
 		// fmt.Println("args append key(%v), value(%v)", args.Key, j + args.Value);
 		pb.db[args.Key] = j + args.Value
-		reply.Err = OK
 	}
+	reply.Err = OK
 }
 
 func (pb *PBServer) CheckAtMostOnce (args *PutAppendArgs) bool {
@@ -69,17 +90,30 @@ func (pb *PBServer) CheckAtMostOnce (args *PutAppendArgs) bool {
 
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 	pb.mu.Lock()
-	// Your code here.
-	// fmt.Println("mode(%v)", args.Mode)
+	if !pb.IsPrimary() {
+		reply.Err = ErrWrongServer
+		pb.mu.Unlock()
+		return errors.New("WrongServer")
+	}
 
 	//first check if current request have been seen and satisfied
-	if pb.CheckAtMostOnce(args) == false {
-		pb.HandlePutAppend(args, reply)
-		// also updates backup server if current is primary server
-		if pb.IsPrimary() && pb.view.Backup != "" {
-			pb.ServerPut(args.Key, args.Value, pb.view.Backup, args.Mode)
+	if pb.CheckAtMostOnce(args) == true {
+		pb.mu.Unlock()
+		return nil
+	}
+
+	// also updates backup server if current is primary server
+	if pb.IsPrimary() && pb.HasBackup() {
+		flag := pb.ServerPut(args, reply, pb.view.Backup)
+		if flag == false {
+			pb.mu.Unlock()
+			return errors.New("Forward fail")
 		}
 	}
+		// fmt.Println("at-most-once (%v %v %v %v)", args.Key, args.Value, args.Who, args.RID);
+	pb.db["Meta-" + args.RID] = args.Who
+	pb.HandlePutAppend(args, reply)
+
 	pb.mu.Unlock()
 	return nil
 }
@@ -89,27 +123,50 @@ func (pb *PBServer) ServerReceive(args *PutAppendArgs, reply *PutAppendReply) er
 	pb.mu.Lock()
 	// Your code here.
 	// fmt.Println("mode(%v)", args.Mode)
+
+	if !pb.IsBackup() {
+		pb.mu.Unlock()
+		return errors.New("Primary receive request from PBServer")
+	}
+
 	pb.HandlePutAppend(args, reply)
 	pb.mu.Unlock()
 	return nil
 }
 
 // DBServer RPC used for inter-servers commnunication
-func (pb *PBServer) ServerPut(key string, value string, rpchost string, mode int32)  {
-	if Debug != 0 {
-		fmt.Println("ServerPut (%v %v %v %v)", pb.view.Primary, rpchost, key, value)
-	}
+func (pb *PBServer) ServerPut(args *PutAppendArgs, reply *PutAppendReply, rpchost string) bool {
+	// if Debug != 0 {
+	// 	fmt.Println("ServerPut (%v %v %v %v)", pb.view.Primary, rpchost, key, value)
+	// }
 	// maybe fail, and backup is not complete
-	args := &PutAppendArgs{key, value, mode, strconv.FormatInt(nrand(), 10), pb.view.Primary}
-	var reply PutAppendReply
-	flag := call(rpchost, "PBServer.ServerReceive", args, &reply)
-	if flag == false {
-			if Debug != 0 {
-				fmt.Println("Setting Backup RPC error ", pb.view.Primary, pb.view.Backup)
-			}
-	}
+	// args := &PutAppendArgs{key, value, mode, strconv.FormatInt(nrand(), 10), pb.view.Primary}
+	// var reply PutAppendReply
+
+	return call(rpchost, "PBServer.ServerReceive", args, &reply)
 }
 
+func (pb *PBServer) ReceiveForward(args *ForwardArgs, reply *ForwardReply) error{
+	pb.mu.Lock()
+
+	if !pb.IsBackup() {
+		pb.mu.Unlock()
+		return errors.New("Primary receive request from PBServer")
+	}
+
+	for key,value := range args.DB {
+		pb.db[key] = value
+	}
+
+	pb.mu.Unlock()
+	return nil
+}
+
+func (pb *PBServer) Forward (args *ForwardArgs) bool {
+	var reply ForwardReply
+	flag := call(pb.view.Backup, "PBServer.ReceiveForward", args, &reply)
+	return flag
+}
 //
 // ping the viewserver periodically.
 // if view changed:
@@ -124,15 +181,13 @@ func (pb *PBServer) tick() {
 	if err != nil {
 		fmt.Println("Cannot get view from %v", pb.vs.GetServer());
 	}
-
 	// if Backup != change, send the copy of db to new backup
-	if v.Backup != pb.view.Backup && pb.IsPrimary() {
-		for k := range pb.db {
-    	pb.ServerPut(k, pb.db[k], v.Backup, 0)
-		}
-	}
+	sign := (v.Backup != pb.view.Backup && pb.IsPrimary())
 
 	pb.view = v
+	if sign {
+		pb.Forward(&ForwardArgs{DB:pb.db})
+	}
 	pb.mu.Unlock()
 }
 

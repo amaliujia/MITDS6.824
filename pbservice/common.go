@@ -35,5 +35,11 @@ type GetReply struct {
 	Value string
 }
 
+type ForwardArgs struct {
+	DB map[string]string
+}
 
+type ForwardReply struct {
+	Err Err
+}
 // Your RPC definitions here.

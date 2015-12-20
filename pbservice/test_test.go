@@ -87,9 +87,11 @@ func TestBasicFail(t *testing.T) {
 	if v.Backup != s2.me {
 		t.Fatal("backup never came up")
 	}
-
+	fmt.Printf("  ... Passed_111\n")
 	ck.Put("3", "33")
+	fmt.Printf("  ... Passed_222\n")
 	check(ck, "3", "33")
+
 
 	// give the backup time to initialize
 	time.Sleep(3 * viewservice.PingInterval)
@@ -196,6 +198,7 @@ func TestAtMostOnce(t *testing.T) {
 	for iters := 0; iters < viewservice.DeadPings*2; iters++ {
 		view, _ := vck.Get()
 		if view.Primary != "" && view.Backup != "" {
+			fmt.Printf("at-most-once test p b (%v %v)\n", view.Primary, view.Backup)
 			break
 		}
 		time.Sleep(viewservice.PingInterval)

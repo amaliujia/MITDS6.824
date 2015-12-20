@@ -3,7 +3,6 @@ package pbservice
 import "viewservice"
 import "net/rpc"
 import "fmt"
-import "log"
 import "time"
 import "strconv"
 
@@ -16,6 +15,7 @@ type Clerk struct {
 	// Your declarations here
 
 	client_view viewservice.View
+	me string
 }
 
 // this may come in handy.
@@ -33,6 +33,8 @@ func MakeClerk(vshost string, me string) *Clerk {
 	ck.client_view.Viewnum = 0
 	ck.client_view.Primary = ""
 	ck.client_view.Backup = ""
+
+	ck.me = strconv.FormatInt(nrand(), 10)
 
 	return ck
 }
@@ -109,16 +111,7 @@ func (ck *Clerk) Get(key string) string {
 		ck.UpdateView()
 	}
 
-	if reply.Err == ErrNoKey {
-		return "???"
-	} else if reply.Err == OK{
-		return reply.Value
-	}
-
-	log.Fatalf("Havn't handle wrong server yet")
-
-	// send to the wrong server ,should update current view
-	return "???"
+	return reply.Value
 }
 
 //
@@ -130,7 +123,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ck.UpdateView()
 	}
 
-	args := &PutAppendArgs{key, value, 0, strconv.FormatInt(nrand(), 10), ck.vs.GetMe()}
+	args := &PutAppendArgs{key, value, 0, strconv.FormatInt(nrand(), 10), ck.me}
 	var reply PutAppendReply
 	if op == "Put" {
 		args.Mode = 0
@@ -146,6 +139,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 		time.Sleep(viewservice.PingInterval)
 		ck.UpdateView()
+		// fmt.Println("%v %v", key, value)
 	}
 }
 

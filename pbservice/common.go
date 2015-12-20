@@ -13,9 +13,12 @@ type PutAppendArgs struct {
 	Key   string
 	Value string
 	// You'll have to add definitions here.
-	Mode int32 // 0 is put, 1 is append
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+
+	Mode int32 // 0 is put, 1 is append
+	RID string // enforce just once I guess
+	Who string // who sends this request
 }
 
 type PutAppendReply struct {

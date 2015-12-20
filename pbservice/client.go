@@ -5,6 +5,7 @@ import "net/rpc"
 import "fmt"
 import "log"
 import "time"
+import "strconv"
 
 import "crypto/rand"
 import "math/big"
@@ -129,7 +130,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ck.UpdateView()
 	}
 
-	args := &PutAppendArgs{key, value, 0}
+	args := &PutAppendArgs{key, value, 0, strconv.FormatInt(nrand(), 10), ck.vs.GetMe()}
 	var reply PutAppendReply
 	if op == "Put" {
 		args.Mode = 0
@@ -137,11 +138,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		args.Mode = 1
 	}
 
-	// fmt.Println("Outstanding pb server %v", ck.client_view.Primary)
-	//flag :=
-	for (call(ck.client_view.Primary, "PBServer.PutAppend", args, &reply) == false) {
-			fmt.Println("Client Put to Primary RPC error")
-			ck.UpdateView()
+	for {
+		flag := call(ck.client_view.Primary, "PBServer.PutAppend", args, &reply)
+		if flag == true {
+			break
+		}
+
+		time.Sleep(viewservice.PingInterval)
+		ck.UpdateView()
 	}
 }
 

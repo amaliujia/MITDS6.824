@@ -11,6 +11,7 @@ import "sync/atomic"
 import "os"
 import "syscall"
 import "math/rand"
+import "strconv"
 
 const Debug = 0
 
@@ -59,17 +60,26 @@ func (pb *PBServer) HandlePutAppend(args *PutAppendArgs, reply *PutAppendReply) 
 	}
 }
 
+func (pb *PBServer) CheckAtMostOnce (args *PutAppendArgs) bool {
+	if pb.db["Meta-" + args.RID] != "" && pb.db["Meta-" + args.RID] == args.Who {
+		return true
+	}
+	return false
+}
+
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 	pb.mu.Lock()
 	// Your code here.
 	// fmt.Println("mode(%v)", args.Mode)
-	pb.HandlePutAppend(args, reply)
 
-	// also updates backup server if current is primary server
-	if pb.IsPrimary() && pb.view.Backup != "" {
-		pb.ServerPut(args.Key, args.Value, pb.view.Backup, args.Mode)
+	//first check if current request have been seen and satisfied
+	if pb.CheckAtMostOnce(args) == false {
+		pb.HandlePutAppend(args, reply)
+		// also updates backup server if current is primary server
+		if pb.IsPrimary() && pb.view.Backup != "" {
+			pb.ServerPut(args.Key, args.Value, pb.view.Backup, args.Mode)
+		}
 	}
-
 	pb.mu.Unlock()
 	return nil
 }
@@ -89,7 +99,8 @@ func (pb *PBServer) ServerPut(key string, value string, rpchost string, mode int
 	if Debug != 0 {
 		fmt.Println("ServerPut (%v %v %v %v)", pb.view.Primary, rpchost, key, value)
 	}
-	args := &PutAppendArgs{key, value, mode}
+	// maybe fail, and backup is not complete
+	args := &PutAppendArgs{key, value, mode, strconv.FormatInt(nrand(), 10), pb.view.Primary}
 	var reply PutAppendReply
 	flag := call(rpchost, "PBServer.ServerReceive", args, &reply)
 	if flag == false {

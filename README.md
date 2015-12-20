@@ -2,6 +2,8 @@
 
 Lab1 MapReduce Implementation
 
+    The way to dance with Go
+    
 Lab2 Primary/Backup Key Value Store
 
     partA   ViewService. Centralized Master

@@ -4,6 +4,7 @@ import "viewservice"
 import "net/rpc"
 import "fmt"
 import "log"
+import "time"
 
 import "crypto/rand"
 import "math/big"
@@ -70,22 +71,16 @@ func call(srv string, rpcname string,
 	return false
 }
 
-func (ck *Clerk) QueryView() viewservice.View{
+func (ck *Clerk) QueryView() {
 	view, flag := ck.vs.Get()
 	if flag == false {
-		fmt.Println("Client cannot get view fomr ViewServer")
-
+		return
 	}
-	return view;
+	ck.client_view = view
 }
 
 func (ck *Clerk) UpdateView() {
-		ck.client_view = ck.QueryView()
-
-}
-
-func (ck *Clerk) HandleReply() {
-
+	 ck.QueryView()
 }
 
 //
@@ -97,16 +92,20 @@ func (ck *Clerk) HandleReply() {
 //
 func (ck *Clerk) Get(key string) string {
 	// Your code here.
-
 	for ck.client_view.Viewnum == 0 {
 		ck.UpdateView()
 	}
 
 	args := &GetArgs{key}
 	var reply GetReply
-	flag := call(ck.client_view.Primary, "PBServer.Get", args, &reply)
-	if flag == false{
-		return "???"
+
+	for {
+		flag := call(ck.client_view.Primary, "PBServer.Get", args, &reply)
+		if flag == true {
+				break
+		}
+		time.Sleep(viewservice.PingInterval)
+		ck.UpdateView()
 	}
 
 	if reply.Err == ErrNoKey {
@@ -130,7 +129,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ck.UpdateView()
 	}
 
-	args := &PutAppendArgs{key, value, 1}
+	args := &PutAppendArgs{key, value, 0}
 	var reply PutAppendReply
 	if op == "Put" {
 		args.Mode = 0
@@ -139,9 +138,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 
 	// fmt.Println("Outstanding pb server %v", ck.client_view.Primary)
-	flag := call(ck.client_view.Primary, "PBServer.PutAppend", args, &reply)
-	if flag == false {
-			fmt.Println("RPC error")
+	//flag :=
+	for (call(ck.client_view.Primary, "PBServer.PutAppend", args, &reply) == false) {
+			fmt.Println("Client Put to Primary RPC error")
+			ck.UpdateView()
 	}
 }
 

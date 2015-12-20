@@ -12,7 +12,7 @@ import "os"
 import "syscall"
 import "math/rand"
 
-
+const Debug = 0
 
 type PBServer struct {
 	mu         sync.Mutex
@@ -28,7 +28,12 @@ type PBServer struct {
 }
 
 
+func (pb *PBServer) IsPrimary() bool {
+	return pb.view.Primary == pb.me
+}
+
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
+	pb.mu.Lock()
 	// Your code here.
 	if pb.db[args.Key] == "" {
 		reply.Err = ErrNoKey
@@ -36,13 +41,12 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 		reply.Err = OK
 	}
 	reply.Value = pb.db[args.Key]
+	pb.mu.Unlock()
 	return nil
 }
 
 
-func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
-	// Your code here.
-	// fmt.Println("mode(%v)", args.Mode)
+func (pb *PBServer) HandlePutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if args.Mode == 0 { // put
 		// fmt.Println("args put key(%v), value(%v)", args.Key, args.Value);
 		pb.db[args.Key] = args.Value
@@ -53,10 +57,47 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 		pb.db[args.Key] = j + args.Value
 		reply.Err = OK
 	}
+}
 
+func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
+	pb.mu.Lock()
+	// Your code here.
+	// fmt.Println("mode(%v)", args.Mode)
+	pb.HandlePutAppend(args, reply)
+
+	// also updates backup server if current is primary server
+	if pb.IsPrimary() && pb.view.Backup != "" {
+		pb.ServerPut(args.Key, args.Value, pb.view.Backup, args.Mode)
+	}
+
+	pb.mu.Unlock()
 	return nil
 }
 
+// DBServer RPC used for inter-servers commnunication
+func (pb *PBServer) ServerReceive(args *PutAppendArgs, reply *PutAppendReply) error{
+	pb.mu.Lock()
+	// Your code here.
+	// fmt.Println("mode(%v)", args.Mode)
+	pb.HandlePutAppend(args, reply)
+	pb.mu.Unlock()
+	return nil
+}
+
+// DBServer RPC used for inter-servers commnunication
+func (pb *PBServer) ServerPut(key string, value string, rpchost string, mode int32)  {
+	if Debug != 0 {
+		fmt.Println("ServerPut (%v %v %v %v)", pb.view.Primary, rpchost, key, value)
+	}
+	args := &PutAppendArgs{key, value, mode}
+	var reply PutAppendReply
+	flag := call(rpchost, "PBServer.ServerReceive", args, &reply)
+	if flag == false {
+			if Debug != 0 {
+				fmt.Println("Setting Backup RPC error ", pb.view.Primary, pb.view.Backup)
+			}
+	}
+}
 
 //
 // ping the viewserver periodically.
@@ -66,13 +107,22 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 //
 func (pb *PBServer) tick() {
 	// Your code here.
-
+	pb.mu.Lock()
 	// @amaliujia call Clerk's functions ditrectly.
 	v, err := pb.vs.Ping(pb.view.Viewnum)
 	if err != nil {
 		fmt.Println("Cannot get view from %v", pb.vs.GetServer());
 	}
+
+	// if Backup != change, send the copy of db to new backup
+	if v.Backup != pb.view.Backup && pb.IsPrimary() {
+		for k := range pb.db {
+    	pb.ServerPut(k, pb.db[k], v.Backup, 0)
+		}
+	}
+
 	pb.view = v
+	pb.mu.Unlock()
 }
 
 // tell the server to shut itself down.

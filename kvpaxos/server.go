@@ -11,7 +11,7 @@ import "os"
 import "syscall"
 import "encoding/gob"
 import "math/rand"
-
+import "time"
 
 const Debug = 0
 
@@ -22,11 +22,15 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
-type Op struct {
+type Op struct { // Paxos value?
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Key	string
+	Value string
+	Type string
+	RID string
+	Client string
 }
 
 type KVPaxos struct {
@@ -38,17 +42,87 @@ type KVPaxos struct {
 	px         *paxos.Paxos
 
 	// Your definitions here.
+	seen			map[string]string
+	db				map[string]string
+	gets			map[string]string
+	seed			int
 }
 
+func (kv *KVPaxos) ReachAgreement(seq int) Op {
+	to := 10 * time.Millisecond
+	for {
+		status, v := kv.px.Status(seq)
+		if status == paxos.Decided{
+			return v.(Op)
+		}
+		time.Sleep(to)
+		if to < 10 * time.Second {
+			to *= 2
+		}
+	}
+}
+
+func (kv *KVPaxos) CommitEntries(seq int, v Op) {
+	if v.Type == GET {
+		prev, exist := kv.db[v.Key]
+		if !exist {
+			prev = ""
+		}
+		kv.gets[v.Client] = prev
+	} else if v.Type == APPEND {
+		kv.db[v.Key] = kv.db[v.Key] + v.Value
+	} else {
+		kv.db[v.Key] = v.Value
+	}
+
+	kv.px.Done(seq)
+}
+
+func (kv *KVPaxos) Paxos(v Op) {
+	var ok bool = false
+	if !ok {
+		kv.seed++
+		stauts, o := kv.px.Status(kv.seed)
+		if stauts == paxos.Pending {
+			kv.px.Start(kv.seed, v)
+			agreed := kv.ReachAgreement(kv.seed)
+			ok = (agreed.RID == v.RID)
+			kv.CommitEntries(kv.seed, agreed)
+		} else if stauts == paxos.Decided {
+			kv.CommitEntries(kv.seed, o.(Op))
+		}
+	}
+}
 
 func (kv *KVPaxos) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	reply.Err = OK
+	rid := args.RID
+	if kv.seen[args.Me] == rid {
+		reply.Value = kv.gets[args.Me]
+		return nil
+	}
+
+	kv.Paxos(Op{Key:args.Key, Type:GET, RID:args.RID, Client:args.Me})
+	kv.seen[args.Me] = rid
+	reply.Value = kv.gets[args.Me]
 	return nil
 }
 
 func (kv *KVPaxos) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	// Your code here.
+	rid := args.RID
+	reply.Err = OK
+	if kv.seen[args.Me] == rid {
+		return nil
+	}
 
+	kv.Paxos(Op{Key:args.Key, Value:args.Value, Type:args.Op, RID:args.RID, Client:args.Me})
+	kv.seen[args.Me] = rid
 	return nil
 }
 
@@ -94,6 +168,10 @@ func StartServer(servers []string, me int) *KVPaxos {
 	kv.me = me
 
 	// Your initialization code here.
+	kv.db = map[string]string{}
+	kv.seen = map[string]string{}
+	kv.gets = map[string]string{}
+	kv.seed = 0
 
 	rpcs := rpc.NewServer()
 	rpcs.Register(kv)
